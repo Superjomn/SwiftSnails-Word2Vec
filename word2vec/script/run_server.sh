@@ -1,1 +1,1 @@
-./bin/server --config server.conf
+./bin/server --config config/server.conf

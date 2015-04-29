@@ -1,1 +1,1 @@
-./bin/worker -config worker.conf -data data.sample
+./bin/worker -config config/worker.conf -data data.sample

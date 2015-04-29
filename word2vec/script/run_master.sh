@@ -1,1 +1,1 @@
-./bin/master --config master.conf
+./bin/master --config config/master.conf

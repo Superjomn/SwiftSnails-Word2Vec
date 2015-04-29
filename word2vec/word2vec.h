@@ -196,25 +196,42 @@ protected:
 			fprintf(stderr, "no such file or directory: %s", path.c_str());
 			exit(1);
 		}
-        long word = 0;
-        while(true) {
-            word = ReadWordKey(file);
-            //RAW_LOG(INFO, "read %d", word);
-            if(feof(file)) break;
-            if(word == -1 || word == -2) continue;
-            inc_word(word);
-            train_words++;
-            if (train_words % 100000 == 0) {
-                printf("%lldK%c", train_words / 1000, 13);
-                fflush(stdout);
+        std::mutex file_mut;
+        SpinLock vocab_mut;
+        auto read_word = [this, &file, &vocab_mut, &file_mut] {
+            long word = 0;
+            while(true) {
+                {std::lock_guard<std::mutex> lk(file_mut);
+                    word = ReadWordKey(file); 
+                }
+                //RAW_LOG(INFO, "read %d", word);
+                if(feof(file)) break;
+                if(word == -1 || word == -2) continue;
+                { std::lock_guard<SpinLock> lk(vocab_mut);
+                    inc_word(word); 
+                }
+                train_words++;
+                if (train_words % 100000 == 0) {
+                    printf("%lldK%c", train_words / 1000, 13);
+                    fflush(stdout);
+                }
             }
-        }
-        LOG(INFO) << "file_size:\t" << file_size;
+        };
+
+        //int thread_num = global_config().get_config("async_channel_thread_num").to_int32() / 2;
+        int thread_num = 1;
+        LOG(WARNING) << "start " << thread_num << " to build vocab";
+        AsynExec as(thread_num);
+        auto channel = as.open();
+        async_exec(thread_num, std::move(read_word), channel);
+
 		file_size = ftell(file);
+        LOG(INFO) << "file_size:\t" << file_size;
         DLOG(INFO) << "to create worditems";
 		//worditems.reset(new std::pair<key_t, WordItem>[vocab.size()]);
         reset_worditems(vocab.size());
 		for (const auto& item : vocab) {
+            //LOG(INFO) << "first:\t" << item.first << "\tsecond:\t" << item.second.id;
 			worditems[item.second.id] = item;
 		}
 		LOG(INFO)<< "vocabulary load\t" << vocab.size() << "\t words";
