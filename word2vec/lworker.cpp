@@ -1,5 +1,5 @@
 #include "swiftsnails.h"
-#include "word2vec_local.h"
+#include "word2vec_local2.h"
 #define NDEBUG
 using namespace swift_snails;
 using namespace fms;

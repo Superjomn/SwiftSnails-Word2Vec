@@ -1,1 +1,1 @@
-./bin/lworker -config worker.conf -data data.sample
+./bin/swift_lworker -config config/worker.conf -data data.sample

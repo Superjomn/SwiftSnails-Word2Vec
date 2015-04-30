@@ -1,1 +1,1 @@
-./bin/master --config config/master.conf
+./bin/swift_master --config config/master.conf

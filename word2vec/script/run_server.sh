@@ -1,1 +1,1 @@
-./bin/server --config config/server.conf
+./bin/swift_server --config config/server.conf
