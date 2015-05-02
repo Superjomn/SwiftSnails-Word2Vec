@@ -1,3 +1,8 @@
+/*
+ * word2vec with local parameter cache
+ *
+ * parameter cache cantains parameters in a mini-batch
+ */
 #pragma once
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,6 +28,7 @@ using namespace std;
 size_t train_words = 0;
 long long file_size = 0;
 long long word_count_actual = 0;
+long long word_count = 0, last_word_count = 0; 
 clock_t start;
 
 struct Random {
@@ -301,15 +307,22 @@ public:
     }
     // push and clear local cache
     void push() {
-        DLOG(INFO) << "to push to PS";
+        DLOG(INFO) << "to push to PS, key count:\t" << local_keys.size();
+        //int i = 0;
+        //for(auto& key : local_keys) {
+            //if(i ++ > 10) break;
+            //LOG(INFO) <<  "grad for " << key << " " << param_cache.grads()[key];
+        //}
         if(local_keys.empty()) {
             RAW_DLOG(INFO, "local_keys empty, do not push");
             return;
         }
         push_access.push_with_barrier(local_keys, param_cache);
+        DLOG(INFO) << "end push to PS";
     }
 
     void clear() {
+        DLOG(INFO) << "to clear local_param";
         local_keys.clear();
         param_cache.clear();
     }
@@ -323,9 +336,11 @@ protected:
         DLOG(INFO) << "... init local cache";
         CHECK(local_keys.empty());
         CHECK(!local_vocab.vocab.empty());
+        DLOG(INFO) << "> to init local_vocab";
         for(auto& item : local_vocab.vocab) {
             local_keys.insert(item.first);
         }
+        DLOG(INFO) << "> to init param_cache";
         // init param cahce
         for(auto &key : local_keys) {
             param_cache.init_key(key);
@@ -340,12 +355,13 @@ protected:
 };
 
 
-    
 class MiniBatch {
 public:
     typedef index_t          key_t;
     typedef Word2VecParam val_t;
     typedef Word2VecGrad grad_t;
+    size_t num_sents_to_cache = 0;
+    int num_sents_each_thread = 0;
 
     Vocab local_vocab;
     Vocab &global_vocab;
@@ -356,33 +372,51 @@ public:
         local_cache(local_vocab)
     { 
         num_sents_to_cache = global_config().get_config("num_sents_to_cache").to_int32();
+        num_threads = global_config().get_config("async_channel_thread_num").to_int32();
+        num_sents_each_thread = num_sents_to_cache / num_threads;
         CHECK_GT(num_sents_to_cache, 0);
+        CHECK_GT(num_sents_each_thread, 0);
     }
 
-    void collect_keys(FILE *file, size_t word_count, size_t word_task) {
-        long cur_pos = ftell(file);
+    // collect words from following sententences
+    size_t collect_keys(FILE *file) {
+        RAW_DLOG(INFO, "minibatch to collect keys");
+        //long cur_pos = ftell(file);
         size_t word_counter = 0;
         char word[MAX_STRING];
-        size_t sentence_counter = 0;
+        size_t sentence_counter = 1;
+        long file_pos;
         size_t key;
         char *end;
+
+        // put initial filepos
+        _file_poses.push_back(ftell(file));
         // read words
         for(;;) {
             if (feof(file)) break;
             if(sentence_counter >= num_sents_to_cache) break;
-            if(word_count > word_task) break;
             key = ReadWordKey(file);
             if(key == -1) break;
             if(key == -2) {
-                sentence_counter ++;
+                if(sentence_counter++ % num_sents_each_thread == 0) {
+                    if(_file_poses.size() < num_threads) {
+                        file_pos = ftell(file);
+                        //LOG(INFO) << "push file_pos:\t" << file_pos;
+                        _file_poses.push_back(file_pos);
+                    }
+                }
                 continue;
             }
-            word_count ++;
+            //word_count ++;
             if(global_vocab.vocab.count(key) > 0) local_vocab.inc_word(key);
         }
+        // put tail of this minibatch
+        _file_poses.push_back(ftell(file));
         // resume position
-        fseek(file, cur_pos, SEEK_SET);
-        RAW_DLOG(INFO, "collect %d keys", local_vocab.size());
+        //fseek(file, cur_pos, SEEK_SET);
+        RAW_DLOG(INFO, "minibatch collect %d keys", local_vocab.size());
+        CHECK_LE(_file_poses.size(), num_threads + 1);
+        return local_vocab.size();
     }
 
     LocalCache::param_cache_t& cache() {
@@ -396,15 +430,22 @@ public:
 
     void push() {
         local_cache.push();
+        DLOG(INFO) << "> to clear local_vocab";
         local_vocab.clear();
+        DLOG(INFO) << "> to clear local cache";
         local_cache.clear();
+        DLOG(INFO) << "> to clear file poses";
+        _file_poses.clear();
+    }
+
+    const vector<long long >& file_poses() const {
+        return _file_poses;
     }
 
 private:
-    //pull_access_t &pull_access;
-    //push_access_t &push_access;
-    //LocalCache &local_cache;
-    size_t num_sents_to_cache = 0;
+    int num_threads = 0;
+    // task for each thread
+    std::vector<long long> _file_poses;
 };
 
 
@@ -445,42 +486,68 @@ public:
 
     void train() {
         Error global_error;
-        //DLOG(INFO) << "param size:\t" << global_param.cache().size();
-        for(int iter = 0; iter < global_config().get_config("num_iters").to_int32(); iter ++) {
-           // global_param.pull();
-            vector<thread> threads;
-            for( int i = 0; i < num_threads; i++) {
-                DLOG(INFO) << "start train thread " << i;
-                thread t([this, &global_error, i] {
-                    TrainModelThread(data_path, i, global_error);
-                });
-                threads.push_back(std::move(t));
-            }
+        MiniBatch minibatch(global_vocab);
+        int num_iters = global_config().get_config("num_iters").to_int32();
+        LOG(WARNING) << "start " << num_threads << " to train " << data_path;
 
-            for(auto &t : threads) {
-                t.join();
-            }
-            
+        for(int iter = 0; iter < num_iters; iter++) {
+            train_iter(data_path, global_error, num_threads);
             LOG(WARNING) << iter << " th train!";
             RAW_LOG(WARNING, "error:\t%f", global_error.norm());
             word_count_actual = 0;
-            //global_param.push();
+            word_count = 0;
+            last_word_count = 0;
         }
     }
 
+    void train_iter(const string &train_file, Error& global_error, int thread_num) {
+        MiniBatch minibatch(global_vocab);
+		FILE *fi = fopen(train_file.c_str(), "rb");
+        AsynExec as(thread_num); auto channel = as.open();
 
-	void TrainModelThread(const string &train_file, int id, Error& global_error) {
+        while(true) {
+            // TODO fix statebarrier block state
+            StateBarrier state;
+            // collect keys from num sents
+            size_t size = minibatch.collect_keys(fi);
+            if(size < 10) break;
+            minibatch.pull();
+            CHECK_LE(minibatch.file_poses().size(), thread_num + 1);
+            std::atomic<size_t> finish_counter{minibatch.file_poses().size() - 1};
+            auto& file_poses = minibatch.file_poses();
+            long long file_start_pos, file_end_pos;
+            for(int id = 0; id < file_poses.size() - 1; id++) {
+                file_start_pos = file_poses[id];
+                file_end_pos = file_poses[id+1];
+                LOG(INFO) << "start task file pos:\t" << file_start_pos 
+                    << "\t" << file_end_pos;
+                auto thread_task = [this, id, train_file, file_start_pos, file_end_pos, &global_error, &minibatch, &finish_counter, &state] {
+                    TrainModelThread(id, train_file, file_start_pos, file_end_pos, global_error, minibatch);
+                    LOG(INFO) << "end train thread " << id << "... ";
+                    if( -- finish_counter == 0) {
+                        state.set_state_valid();
+                        state.try_unblock();
+                    }
+                };
+                channel->push(std::move(thread_task));
+            }
+            state.block();
+            // all worker threads have finished work
+            minibatch.push();
+            if (feof(fi)) break;
+        }
+    }
+
+	void TrainModelThread(int id, const string &train_file, long file_start_pos, long file_end_pos, Error& global_error, MiniBatch &minibatch) {
         //LocalParamCache local_param;
         Random random((unsigned long long)id);
 		long long a, b, d, word, last_word, sentence_length = 0, sentence_position = 0;
-		long long word_count = 0, last_word_count = 0, sen[MAX_SENTENCE_LENGTH + 1];
+		long long sen[MAX_SENTENCE_LENGTH + 1];
 		long long l1, l2, c, target, label;
         long sentence_counter = 0;
-        long last_sentence_counter = -1;
-		//unsigned long long next_random = (long long) id;
+        long last_sentence_counter = sentence_counter;
 		real_t f, g;
 		clock_t now;
-        MiniBatch minibatch(global_vocab);
         auto& params = minibatch.cache().params();
         auto& grads = minibatch.cache().grads();
         auto& vocab = minibatch.local_vocab;
@@ -491,7 +558,8 @@ public:
 			fprintf(stderr, "no such file or directory: %s", train_file.c_str());
 			exit(1);
 		}
-		fseek(fi, file_size / (long long) num_threads * (long long) id, SEEK_SET);
+        LOG(INFO) << "thread " << id << " file fseek :\t" << file_start_pos;
+		fseek(fi, file_start_pos, SEEK_SET);
 		while (true) {
 			if (word_count - last_word_count > 10000000) {
 				word_count_actual += word_count - last_word_count;
@@ -513,17 +581,8 @@ public:
 				if (alpha < starting_alpha * 0.0001)
 					alpha = starting_alpha * 0.0001;
 			}
-            // update paramters
-            if( sentence_counter % num_sents_to_cache == 0 && sentence_counter != last_sentence_counter) {
-                // push last minibatch
-                RAW_DLOG(INFO, "sentence_counter:\t%d", sentence_counter);
-                last_sentence_counter = sentence_counter;
-                if(sentence_counter > 0) minibatch.push();
-                //minibatch.clear();
-                minibatch.collect_keys(fi, word_count, train_words / num_threads);
-                minibatch.pull();
-            }
             // read a sentence
+            //LOG(INFO) << "thread " << id << " read a sentence";
 			if (sentence_length == 0) {
 				while (1) {
 					word = ReadWordKey(fi);
@@ -541,8 +600,6 @@ public:
 					if (sample > 0) {
 						real_t ran = (sqrt(vocab[word].count / (sample * train_words))
 						        + 1) * (sample * train_words) / vocab[word].count;
-						//next_random = next_random * (unsigned long long) 25214903917
-						        //+ 11;
 						if (ran < (random() & 0xFFFF) / (real_t) 65536)
 							continue;
 					}
@@ -553,15 +610,16 @@ public:
 				}
 				sentence_position = 0;
 			}
-			if (feof(fi))
-				break;
-			if (word_count > train_words / num_threads)
-				break;
+
+            if (ftell(fi) >= file_end_pos) break;
+			if (feof(fi)) break;
+
 			word = sen[sentence_position];
+            //LOG(INFO) << "word:\t" << word;
 			if (word == -1) continue;
 			for (c = 0; c < len_vec; c++) neu1[c] = 0;
 			for (c = 0; c < len_vec; c++) neu1e[c] = 0;
-			//next_random = next_random * (unsigned long long) 25214903917 + 11;
+
 			b = random() % window;
 			if (cbow) {  //train the cbow architecture
 				// in -> hidden
@@ -576,14 +634,12 @@ public:
 						if (last_word == -1)
 							continue;
                         if(params.count(last_word) == 0) continue;
-                        if(vocab.vocab.count(last_word) == 0) continue;
-                        //CHECK(vocab.vocab.count(last_word) > 0) << last_word;
-                        //CHECK(params.count(last_word) > 0) << last_word;
+                        CHECK(vocab.vocab.count(last_word) > 0) << last_word;
+                        CHECK(params.count(last_word) > 0) << last_word;
                         Vec& syn0_lastword = params[last_word].v();
 						for (c = 0; c < len_vec; c++) {
                             neu1[c] += syn0_lastword[c];
                         }
-							//neu1[c] += syn0[c + last_word * len_vec];
 					}
 
 				// NEGATIVE SAMPLING
@@ -592,9 +648,9 @@ public:
 						if (d == 0) {
 							target = word;
 							label = 1;
+
 						} else {
-							//next_random = next_random
-							        //* (unsigned long long) 25214903917 + 11;
+
 							target = vocab.table[(random() >> 16) % table_size];
 							if (target == 0)
                                 target = vocab.table[(random() >> 16) % table_size];
@@ -605,12 +661,13 @@ public:
 							label = 0;
 						}
                         if (params.count(target) == 0) continue;
-                        if (vocab.vocab.count(target) == 0) continue;
+
+                        CHECK(vocab.vocab.count(target) > 0) << target;
+                        CHECK(params.count(target) > 0) << target;
                         Vec& syn1neg_target = params[target].h();
 						f = 0;
 						for (c = 0; c < len_vec; c++)
                             f += neu1[c] * syn1neg_target[c];
-							//f += neu1[c] * syn1neg[c + l2];
 						if (f > MAX_EXP)
 							g = (label - 1) * alpha;
 						else if (f < -MAX_EXP)
@@ -625,13 +682,10 @@ public:
                         
 						for (c = 0; c < len_vec; c++)
                             neu1e[c] += g * syn1neg_target[c];
-							//neu1e[c] += g * syn1neg[c + l2];
-                        /*
-						for (c = 0; c < len_vec; c++)
-                            syn1neg_target[c] += g * neu1[c];
-                        */
 
-                        grads[target].accu_h(g * neu1);// / alpha);
+                        CHECK(grads.count(target) > 0) << "key:\t" << target;
+                        auto& grad_target = grads[target];
+                        grad_target.accu_h(g * neu1);
 					}
 				// hidden -> in
 				for (a = b; a < window * 2 + 1 - b; a++)
@@ -644,27 +698,21 @@ public:
 						last_word = sen[c];
 						if (last_word == -1)
 							continue;
-                        Vec &syn0_lastword = params[last_word].v();
-                        /*
-						for (c = 0; c < len_vec; c++)
-                            syn0_lastword[c] += neu1e[c];
-                        */
-							//syn0[c + last_word * len_vec] += neu1e[c];
-                        grads[last_word].accu_v(neu1e);// / alpha);
+
+                        auto& grad_last_word = grads[last_word];
+                        grad_last_word.accu_v(neu1e);// / alpha);
 					}
 			}
+
 			sentence_position++;
 			if (sentence_position >= sentence_length) {
 				sentence_length = 0;
 				continue;
 			}
 		}
-        minibatch.push();
 		fclose(fi);
-		//free(neu1);
-		//free(neu1e);
-		pthread_exit(NULL);
 	}
+
     void init_exp_table() {
         expTable = (real_t *) malloc((EXP_TABLE_SIZE + 1) * sizeof(real_t));
         if (expTable == NULL) {
@@ -689,6 +737,7 @@ private:
     int num_sents_to_cache = 0;
 	bool cbow = false;
 	real_t alpha = 0.025;
+    real_t learning_rate = 0.025;
     real_t sample = 1e-3;
     bool debug_mode = true;
     real_t starting_alpha = 0.025;
