@@ -158,7 +158,19 @@ num_sents_to_cache: 10000
 * dist_log.sh 搜集最新的执行
 * dist_collect_parameter.sh 任务执行完毕，汇总集群中各server产生的参数
 
+## 两种模式
+前面讲到 swift_worker 和 swift_lworker 两种计算节点，两种节点的差别是单个节点的参数缓存的规模。
+
+* swift_worker : 单个worker节点缓存本节点中训练数据涉及的参数
+* swift_lworker : 单个节点只缓存一个minibatch中涉及的参数
+
+一般前者和后者所占用内存规模相差一个数量级。 
+前者在Negative-Sampling中噪音采样的范围大很多，效果也比后者好。
+
+后者的内存占用小很多，可以训练高维向量（比如500维以上)。
+
 # 联系作者
 
 Weibo: @superjom
+
 mailTo: yanchunwei[A|T-]outlook.com
