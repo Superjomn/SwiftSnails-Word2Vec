@@ -157,3 +157,8 @@ num_sents_to_cache: 10000
 * dist_kill_demo.sh kill集群任务
 * dist_log.sh 搜集最新的执行
 * dist_collect_parameter.sh 任务执行完毕，汇总集群中各server产生的参数
+
+# 联系作者
+
+Weibo: @superjom
+mailTo: yanchunwei[A|T-]outlook.com
