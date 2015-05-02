@@ -576,8 +576,7 @@ public:
 					word_count++;
 					if (word == -2) // get </s> or \n
                     {
-                        if(sentence_counter ++ > minibatch.num_sents_each_thread) 
-						break;
+                        if(sentence_counter ++ > minibatch.num_sents_each_thread) break;
                     } 
                     
 					// The subsampling randomly discards frequent words while keeping the ranking same
@@ -657,7 +656,7 @@ public:
 
                         //if (vocab.vocab.count(target) == 0) continue;
                         //if (params.count(target) == 0) continue;
-                        //if (grads.count(target) == 0) continue;
+                        if (grads.count(target) == 0) continue;
                         Vec &syn1neg_target = params[target].h();
                         //}
 
