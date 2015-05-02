@@ -8,7 +8,9 @@ cd ../
 
 rm -f ./cluster_demo.tar*
 
-tar cvf cluster_demo.tar ./cluster_demo
+cp ../bin/swift_* ./
+
+tar cvf cluster_demo.tar ./tools
 #gzip cluster_demo.tar
 
 for node in $NODES; do
