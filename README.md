@@ -1,8 +1,9 @@
-### SwiftSnails-Word2Vec
+# SwiftSnails-Word2Vec
 SwiftSnails-Word2Vec 是一个高性能的分布式Word2Vec分布式实现。
 
-如果你需要从大量的文本数据（大于30G)，需要生成低纬（比如25~300)，高纬度(比如500以上)的词向量，可以直接访问 http://yun.baidu.com/s/1gdgYkiZ 获取（这是我们之前生成的一套词向量 64G数据+43w词库） ，
-或者可以直接使用本项目， 修改一些配置就可以直接运行了。
+如果你需要从大量的文本数据（大于30G)，词向量，可以使用本项目， 修改一些配置就可以直接运行。
+
+也可以访问 http://yun.baidu.com/s/1gdgYkiZ 获取（这是我们之前生成的一套词向量，64G数据+43w词库）。
 
 ## 编译方法
 本项目直接依赖SwiftSnails参数服务器，请提前下载SwiftSnails，并安装所有的第三方依赖。
@@ -49,7 +50,7 @@ SwiftSnails中需要三类节点的配置，此处基准配置在 `config/` 目�
 zlib : 0~9 数值
 ```
 
-# master.conf
+### master.conf
 ```
 # master 节点侦听地址
 listen_addr: tcp://127.0.0.1:16831
@@ -91,7 +92,7 @@ num_iters: 1
 line_buffer_queue_capacity : 100
 ```
 
-# server.conf
+### server.conf
 类似配置参考 *worker.conf*
 ```
 # 单个server上的参数分块数（由于采用了读写锁，拆分多个shard后可以提升性能)
