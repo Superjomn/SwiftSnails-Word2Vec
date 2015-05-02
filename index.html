@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en-us">
+  <head>
+    <meta charset="UTF-8">
+    <title>SwiftSnails-Word2Vec by Superjom</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" type="text/css" href="stylesheets/normalize.css" media="screen">
+    <link href='http://fonts.googleapis.com/css?family=Open+Sans:400,700' rel='stylesheet' type='text/css'>
+    <link rel="stylesheet" type="text/css" href="stylesheets/stylesheet.css" media="screen">
+    <link rel="stylesheet" type="text/css" href="stylesheets/github-light.css" media="screen">
+  </head>
+  <body>
+    <section class="page-header">
+      <h1 class="project-name">SwiftSnails-Word2Vec</h1>
+      <h2 class="project-tagline">一个分布式的Word2Vec实现</h2>
+      <a href="https://github.com/Superjom/SwiftSnails-Word2Vec" class="btn">View on GitHub</a>
+      <a href="https://github.com/Superjom/SwiftSnails-Word2Vec/zipball/master" class="btn">Download .zip</a>
+      <a href="https://github.com/Superjom/SwiftSnails-Word2Vec/tarball/master" class="btn">Download .tar.gz</a>
+    </section>
+
+    <section class="main-content">
+      <h1>
+<a id="swiftsnails-word2vec" class="anchor" href="#swiftsnails-word2vec" aria-hidden="true"><span class="octicon octicon-link"></span></a>SwiftSnails-Word2Vec</h1>
+
+<p>SwiftSnails-Word2Vec 是一个高性能的分布式Word2Vec分布式实现。</p>
+
+<p>如果你需要从大量的文本数据（大于30G)，词向量，可以使用本项目， 修改一些配置就可以直接运行。</p>
+
+<p>也可以访问 <a href="http://yun.baidu.com/s/1gdgYkiZ">http://yun.baidu.com/s/1gdgYkiZ</a> 获取（这是我们之前生成的一套词向量，64G数据+43w词库）。</p>
+
+<h2>
+<a id="编译方法" class="anchor" href="#%E7%BC%96%E8%AF%91%E6%96%B9%E6%B3%95" aria-hidden="true"><span class="octicon octicon-link"></span></a>编译方法</h2>
+
+<p>本项目直接依赖SwiftSnails参数服务器，请提前下载SwiftSnails，并安装所有的第三方依赖。</p>
+
+<p>之后在Makefile中作如下配置:</p>
+
+<pre><code># 下载的SwiftSnails的src目录
+SwiftSnails_src=...
+
+# SwiftSnails所有第三方依赖库安装目录
+LOCAL_ROOT...
+</code></pre>
+
+<p>之后编译：</p>
+
+<pre><code>$ mkdir bin
+$ make
+</code></pre>
+
+<p>所有产出的可执行文件在 <code>bin/</code> 目录中，具体内容如下</p>
+
+<pre><code>swift_worker    # 计算节点
+swift_server    # 参数服务器节点
+swift_lworker   # 内存优化的word2vec计算节点
+swift_master    # 中央控制节点
+</code></pre>
+
+<p>一个完整的任务执行需要包括 <em>worker</em> ， <em>server</em> ， <em>master</em> 三种节点的协作。</p>
+
+<p>其中 worker 节点有两种实现： </p>
+
+<ul>
+<li>swift_worker : 常规的CBOW+Negative-Sampling 实现</li>
+<li>swift_worker : 内存优化的版本，通过minibatch的方式控制内存消耗，一般可以降一个数量级</li>
+</ul>
+
+<h2>
+<a id="节点配置" class="anchor" href="#%E8%8A%82%E7%82%B9%E9%85%8D%E7%BD%AE" aria-hidden="true"><span class="octicon octicon-link"></span></a>节点配置</h2>
+
+<p>SwiftSnails中需要三类节点的配置，此处基准配置在 <code>config/</code> 目录中</p>
+
+<h3>
+<a id="commonconf" class="anchor" href="#commonconf" aria-hidden="true"><span class="octicon octicon-link"></span></a>common.conf</h3>
+
+<pre><code># 是否对传输消息进行压缩
+# 0 表示不压缩，数值越大，压缩比例越大
+zlib : 0~9 数值
+</code></pre>
+
+<h3>
+<a id="masterconf" class="anchor" href="#masterconf" aria-hidden="true"><span class="octicon octicon-link"></span></a>master.conf</h3>
+
+<pre><code># master 节点侦听地址
+listen_addr: tcp://127.0.0.1:16831
+
+# master 守候进程数
+async_exec_num: 4
+
+# worker节点数 + server节点数（必须要配置）
+expected_node_num: 4
+
+# 初始化等待时长，超时后，master将不再接受节点登记，单位为秒
+master_time_out: 120
+
+# 参数分块数，便于参数拆分，可以设置为 server数目 * 3
+frag_num: 50
+</code></pre>
+
+<h3>
+<a id="workerconf" class="anchor" href="#workerconf" aria-hidden="true"><span class="octicon octicon-link"></span></a>worker.conf</h3>
+
+<pre><code># worker守候地址，可以不配置，节点会自动获取本机ip及随机端口
+listen_addr:
+
+# 守候线程数目
+async_exec_num: 2
+
+# 初始化超时 最好和 master_time_out 设置相同时间
+init_timeout: 60
+
+# master的监听地址，需要和 master.conf中的listen_addr 相同
+master_addr: tcp://127.0.0.1:16831
+
+# 计算线程数目，最好设置为CPU核数
+async_channel_thread_num
+
+# 迭代次数 如果数据比较大，只需要1轮迭代
+num_iters: 1
+
+# 文件读取缓存，单位为行
+line_buffer_queue_capacity : 100
+</code></pre>
+
+<h3>
+<a id="serverconf" class="anchor" href="#serverconf" aria-hidden="true"><span class="octicon octicon-link"></span></a>server.conf</h3>
+
+<p>类似配置参考 <em>worker.conf</em></p>
+
+<pre><code># 单个server上的参数分块数（由于采用了读写锁，拆分多个shard后可以提升性能)
+# 可以设置多一点 30+ 300+ 都可以
+shard_num: 5
+
+# 执行过程中的参数备份的周期 
+# 备份的周期单位为PUSH的次数
+# 一轮迭代的PUSH次数可以通过 单个节点训练数据行数 / minibatch长度
+param_backup_period: 0
+param_backup_root: ./param_back/
+
+# 是否使用AdaGrad，0表示非, 1表示是
+adagrad: 1
+</code></pre>
+
+<h3>
+<a id="word2vecconf" class="anchor" href="#word2vecconf" aria-hidden="true"><span class="octicon octicon-link"></span></a>word2vec.conf</h3>
+
+<pre><code># 词向量维度
+len_vec: 100
+
+# 初始的学习率
+learning_rate: 0.5
+
+# CBOW 窗口长度
+window: 4
+
+# 负例个数
+negative: 20
+
+# 高频采样
+sample: 0.001
+
+# minibatch 长度
+num_sents_to_cache: 10000
+</code></pre>
+
+<h2>
+<a id="集群配置" class="anchor" href="#%E9%9B%86%E7%BE%A4%E9%85%8D%E7%BD%AE" aria-hidden="true"><span class="octicon octicon-link"></span></a>集群配置</h2>
+
+<p>本项目不包含任何执行任务之外的功能实现，无法：</p>
+
+<ul>
+<li>分发数据</li>
+<li>分发任务</li>
+<li>任务控制</li>
+</ul>
+
+<p>但提供了一些简单的脚本，我们在实际的词向量生成任务中也是使用的这套脚本。</p>
+
+<p><strong>集群配置</strong></p>
+
+<p>需要在集群中一个节点上执行 <em>swift_master</em> ，此节点称为控制节点。</p>
+
+<p>为了方便脚本使用 <strong>ssh</strong> 的方式批量执行命令，需要建立控制节点与其他节点的ssh_key 免密码登陆。</p>
+
+<p>之后可以使用 <em>tools</em> 中的脚本工具。</p>
+
+<p>在 <em>common.sh</em> 中配置集群中的节点IP列表，以及一系列的环境变量</p>
+
+<p>之后的集群执行包括：</p>
+
+<ul>
+<li>copy_exec.sh 复制二进制文件到当前目录</li>
+<li>dist_demo.sh 在common.sh中配置的节点中分发任务</li>
+<li>dist_kill_demo.sh kill集群任务</li>
+<li>dist_log.sh 搜集最新的执行</li>
+<li>dist_collect_parameter.sh 任务执行完毕，汇总集群中各server产生的参数</li>
+</ul>
+
+      <footer class="site-footer">
+        <span class="site-footer-owner"><a href="https://github.com/Superjom/SwiftSnails-Word2Vec">SwiftSnails-Word2Vec</a> is maintained by <a href="https://github.com/Superjom">Superjom</a>.</span>
+
+        <span class="site-footer-credits">This page was generated by <a href="https://pages.github.com">GitHub Pages</a> using the <a href="https://github.com/jasonlong/cayman-theme">Cayman theme</a> by <a href="https://twitter.com/jasonlong">Jason Long</a>.</span>
+      </footer>
+
+    </section>
+
+  
+  </body>
+</html>
+
